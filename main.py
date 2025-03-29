@@ -138,52 +138,75 @@ forward_button.pack(side='left', padx=5)
 
 root.mainloop()
 '''
+
 import cv2
 import mediapipe as mp
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
 import numpy as np
 from mediapipe.framework.formats import landmark_pb2
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
 
-# Mediapipe setup
+DETECTION_COLOR = (0, 255, 0)
+POSE_COLOR_1 = (245, 117, 66)
+POSE_COLOR_2 = (245, 66, 230)
+
 mp_drawing = mp.solutions.drawing_utils
 mp_pose = mp.solutions.pose
 
-# Initialize Pose Landmarker (Do this *once* at the beginning)
-model_path = 'pose_landmarker_full.task'  # Replace with the ACTUAL absolute path!
-base_options = python.BaseOptions(model_asset_path=model_path)
-options = vision.PoseLandmarkerOptions(
-    base_options=base_options,
+pose_model_path = 'pose_landmarker_full.task'
+pose_base_options = python.BaseOptions(model_asset_path=pose_model_path)
+pose_options = vision.PoseLandmarkerOptions(
+    base_options=pose_base_options,
     output_segmentation_masks=True)
-detector = vision.PoseLandmarker.create_from_options(options)
+pose_detector = vision.PoseLandmarker.create_from_options(pose_options)
+
+object_model_path = 'efficientdet_lite0.tflite' # Make sure this is in the correct path
+object_base_options = python.BaseOptions(model_asset_path=object_model_path)
+object_options = vision.ObjectDetectorOptions(base_options=object_base_options,
+                                       score_threshold=0.5)
+object_detector = vision.ObjectDetector.create_from_options(object_options)
 
 
 def draw_landmarks_on_image(rgb_image, detection_result):
     pose_landmarks_list = detection_result.pose_landmarks
     annotated_image = np.copy(rgb_image)
 
-    # Loop through the detected poses to visualize.
     for idx in range(len(pose_landmarks_list)):
         pose_landmarks = pose_landmarks_list[idx]
 
-        # Draw the pose landmarks.
         pose_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
         pose_landmarks_proto.landmark.extend([
             landmark_pb2.NormalizedLandmark(x=landmark.x, y=landmark.y, z=landmark.z) for landmark in
             pose_landmarks
         ])
-        mp_drawing.draw_landmarks(  # Use mp_drawing instead of solutions.drawing_utils
+        mp_drawing.draw_landmarks(
             annotated_image,
             pose_landmarks_proto,
-            mp_pose.POSE_CONNECTIONS, # Use mp_pose.POSE_CONNECTIONS instead of solutions.pose.POSE_CONNECTIONS
-            mp_drawing.DrawingSpec(color=(245, 117, 66), thickness=2, circle_radius=4),  # Use mp_drawing here too
-            mp_drawing.DrawingSpec(color=(245, 66, 230), thickness=2, circle_radius=2)
+            mp_pose.POSE_CONNECTIONS,
+            mp_drawing.DrawingSpec(color=POSE_COLOR_1, thickness=2, circle_radius=4),
+            mp_drawing.DrawingSpec(color=POSE_COLOR_2, thickness=2, circle_radius=2)
         )
     return annotated_image
 
+def visualize_objects(rgb_image, detection_result):
+    annotated_image = np.copy(rgb_image)
+
+    for detection in detection_result.detections:
+        bbox = detection.bounding_box
+        start_point = bbox.origin_x, bbox.origin_y
+        end_point = bbox.origin_x + bbox.width, bbox.origin_y + bbox.height
+        cv2.rectangle(annotated_image, start_point, end_point, DETECTION_COLOR, 2)
+
+        category = detection.categories[0]
+        class_name = category.category_name
+        probability = round(category.score, 2)
+        result_text = class_name + ' (' + str(probability) + ')'
+        text_location = (bbox.origin_x + 5, bbox.origin_y + 15)
+        cv2.putText(annotated_image, result_text, text_location, cv2.FONT_HERSHEY_PLAIN, 1, DETECTION_COLOR, 2)
+
+    return annotated_image
 
 video_path = 'videokids2.mp4'
-
 cap = cv2.VideoCapture(video_path)
 
 if not cap.isOpened():
@@ -195,21 +218,18 @@ while True:
     if not ret:
         break
 
-    # Convert the frame to RGB for Mediapipe
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
 
-    # Convert the frame to a MediaPipe image
-    image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+    pose_detection_result = pose_detector.detect(mp_image)
+    object_detection_result = object_detector.detect(mp_image)
 
-    # Detect pose landmarks
-    detection_result = detector.detect(image)
-
-    # Draw landmarks on the frame
-    annotated_image = draw_landmarks_on_image(frame_rgb, detection_result)
-    frame = cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR)  # Convert back to BGR for OpenCV
+    annotated_image = draw_landmarks_on_image(frame_rgb, pose_detection_result) # Draw pose landmarks
+    annotated_image = visualize_objects(annotated_image, object_detection_result) # Draw object detections
+    frame = cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR) # Back to BGR for OpenCV
 
 
-    cv2.imshow('Воспроизведение видео с ориентирами позы', frame)  # Изменен заголовок окна
+    cv2.imshow('Воспроизведение видео с ориентирами позы и обнаружением объектов', frame)
 
     if cv2.waitKey(25) & 0xFF == ord('q'):
         break
