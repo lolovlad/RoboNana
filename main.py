@@ -149,6 +149,7 @@ from mediapipe.tasks.python import vision
 DETECTION_COLOR = (0, 255, 0)
 POSE_COLOR_1 = (245, 117, 66)
 POSE_COLOR_2 = (245, 66, 230)
+SAFE_ZONE_COLOR = (255, 0, 0)  # Red for the safe zone
 
 mp_drawing = mp.solutions.drawing_utils
 mp_pose = mp.solutions.pose
@@ -210,8 +211,34 @@ video_path = 'videokids2.mp4'
 cap = cv2.VideoCapture(video_path)
 
 if not cap.isOpened():
-    print("Ошибка: Не удалось открыть видео.")
+    print("Не удалось открыть видео.")
     exit()
+
+# Initialize safe zone rectangle coordinates and drawing state
+drawing = False
+x1, y1, x2, y2 = 0, 0, 0, 0
+safe_zone_defined = False
+
+def draw_rectangle(event, x, y, flags, param):
+    global x1, y1, x2, y2, drawing, safe_zone_defined
+
+    if event == cv2.EVENT_LBUTTONDOWN:
+        drawing = True
+        x1, y1 = x, y
+        x2, y2 = x, y
+
+    elif event == cv2.EVENT_MOUSEMOVE:
+        if drawing == True:
+            x2, y2 = x, y
+
+    elif event == cv2.EVENT_LBUTTONUP:
+        drawing = False
+        x2, y2 = x, y
+        safe_zone_defined = True
+
+# Create window and bind the drawing function
+cv2.namedWindow('Воспроизведение видео с ориентирами позы и обнаружением объектов')
+cv2.setMouseCallback('Воспроизведение видео с ориентирами позы и обнаружением объектов', draw_rectangle)
 
 while True:
     ret, frame = cap.read()
@@ -228,6 +255,9 @@ while True:
     annotated_image = visualize_objects(annotated_image, object_detection_result) # Draw object detections
     frame = cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR) # Back to BGR for OpenCV
 
+    # Draw the safe zone rectangle if it's defined
+    if safe_zone_defined:
+        cv2.rectangle(frame, (x1, y1), (x2, y2), SAFE_ZONE_COLOR, 2)
 
     cv2.imshow('Воспроизведение видео с ориентирами позы и обнаружением объектов', frame)
 
@@ -236,3 +266,4 @@ while True:
 
 cap.release()
 cv2.destroyAllWindows()
+
