@@ -4,11 +4,12 @@ import numpy as np
 from PIL import Image
 from transformers import AutoImageProcessor, DPTForDepthEstimation
 
-MODEL_NAME = "Intel/dpt-hybrid-midas"  # Или другая гибридная модель, если доступна
+MODEL_NAME = "Intel/dpt-hybrid-midas"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 image_processor = AutoImageProcessor.from_pretrained(MODEL_NAME)
 model = DPTForDepthEstimation.from_pretrained(MODEL_NAME).to(DEVICE)
+
 
 def estimate_depth(frame):
     image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
@@ -28,7 +29,9 @@ def estimate_depth(frame):
     depth_cv = cv2.cvtColor(np.array(depth), cv2.COLOR_RGB2BGR)
 
     return depth_cv
-video_path = 'videokids2.mp4'
+
+
+video_path = 'videokids.mp4'
 cap = cv2.VideoCapture(video_path)
 
 if not cap.isOpened():

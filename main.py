@@ -1,150 +1,13 @@
-'''
-import tkinter as tk
-from tkinter import ttk, filedialog
-from PIL import ImageTk, Image
-import cv2
-
-cap = None
-current_position = 0
-playing = False
-fps = 30
-video_path = None
-
-
-def open_file():
-    global cap, current_position, playing, fps, video_path
-    file_path = filedialog.askopenfilename(filetypes=[('Video files', ('*.mp4', '*.avi', '*.mov', '*.mkv', '*.wmv'))])
-    if file_path:
-        print(f'Выбранный файл: {file_path}')
-        video_path = file_path
-        cap = cv2.VideoCapture(file_path)
-        if not cap.isOpened():
-            print("Error: Could not open video file.")
-            cap = None
-            return
-        current_position = 0
-        fps_value = int(cap.get(cv2.CAP_PROP_FPS))
-        if fps_value > 0:
-            fps = fps_value
-        else:
-            fps = 30
-
-        playing = True
-        update_frame()
-        #play_button['state'] = 'normal'
-        #rewind_button['state'] = 'normal'
-        #forward_button['state'] = 'normal'
-
-
-def update_frame():
-    global cap, current_position, playing, video_path
-    if cap is not None and playing:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, current_position)
-        ret, frame = cap.read()
-        if ret:
-            frame = cv2.resize(frame, (720, 480))
-            image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            image = Image.fromarray(image)
-            image = ImageTk.PhotoImage(image)
-
-            label.config(image=image)
-            label.image = image
-
-            current_position += 1
-            label.after(int(1000 / fps), update_frame)
-        else:
-            stop_video()
-
-
-def stop_video():
-    global cap, playing
-    playing = False
-    if cap is not None:
-        cap.release()
-        cap = None
-    #play_button['state'] = 'normal'
-    #rewind_button['state'] = 'normal'
-    #forward_button['state'] = 'normal'
-
-
-def start_video():
-    global cap, playing, video_path, current_position
-
-    if video_path is not None:
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            print("Error: Could not open video file.")
-            cap = None
-            return
-        cap.set(cv2.CAP_PROP_POS_FRAMES, current_position)
-        playing = True
-        update_frame()
-        play_button['state'] = 'normal'
-        rewind_button['state'] = 'normal'
-        forward_button['state'] = 'normal'
-
-
-def rewind_video():
-    global current_position, cap
-    if cap is not None:
-        current_position = max(0, current_position - fps * 10)
-        update_frame()
-def forward_video():
-    global current_position, cap
-    if cap is not None:
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        current_position = min(total_frames - 1, current_position + fps * 10)
-        update_frame()
-        
-def toggle_playback():
-    global cap, playing, video_path, current_position
-    if playing:
-        stop_video()
-        play_button.config(text='Воспроизвести')
-    else:
-        if video_path is not None:
-            cap = cv2.VideoCapture(video_path)
-            if not cap.isOpened():
-                print("Error: Could not open video file.")
-                cap = None
-                return
-            cap.set(cv2.CAP_PROP_POS_FRAMES, current_position)
-            playing = True
-            update_frame()
-            play_button.config(text='Остановить')
-
-root = tk.Tk()
-root.title('Камера')
-
-label = tk.Label(root)
-label.pack()
-
-open_button = ttk.Button(root, text='Открыть файл', command=open_file)
-open_button.pack()
-
-frame_buttons = ttk.Frame(root)
-frame_buttons.pack()
-
-
-play_button = ttk.Button(frame_buttons, text='Остановить', command=toggle_playback)
-play_button.pack(side='left', padx=5)
-
-rewind_button = ttk.Button(frame_buttons, text='Перемотать << 10 сек', command=rewind_video, state='disabled')
-rewind_button.pack(side='left', padx=5)
-
-forward_button = ttk.Button(frame_buttons, text='Перемотать >> 10 сек', command=forward_video, state='disabled')
-forward_button.pack(side='left', padx=5)
-
-
-root.mainloop()
-'''
-
 import cv2
 import mediapipe as mp
 import numpy as np
 from mediapipe.framework.formats import landmark_pb2
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
+from ultralytics import YOLO
+from math import ceil
+from transformers import pipeline
+from PIL import Image
 
 DETECTION_COLOR = (0, 255, 0)
 POSE_COLOR_1 = (245, 117, 66)
@@ -154,70 +17,42 @@ SAFE_ZONE_COLOR = (255, 0, 0)  # Red for the safe zone
 mp_drawing = mp.solutions.drawing_utils
 mp_pose = mp.solutions.pose
 
-pose_model_path = 'pose_landmarker_full.task'
-pose_base_options = python.BaseOptions(model_asset_path=pose_model_path)
-pose_options = vision.PoseLandmarkerOptions(
-    base_options=pose_base_options,
-    output_segmentation_masks=True)
-pose_detector = vision.PoseLandmarker.create_from_options(pose_options)
 
-object_model_path = 'efficientdet_lite0.tflite' # Make sure this is in the correct path
-object_base_options = python.BaseOptions(model_asset_path=object_model_path)
-object_options = vision.ObjectDetectorOptions(base_options=object_base_options,
-                                       score_threshold=0.5)
-object_detector = vision.ObjectDetector.create_from_options(object_options)
+def draw_landmarks_on_image(rgb_image, pose_landmarks, crop_x, crop_y, crop_width, crop_height):
+    global_landmarks = [
+        landmark_pb2.NormalizedLandmark(
+            x=(crop_x + landmark.x * crop_width) / rgb_image.shape[1],
+            y=(crop_y + landmark.y * crop_height) / rgb_image.shape[0],
+            z=landmark.z
+        )
+        for landmark in pose_landmarks.landmark
+    ]
 
+    pose_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
+    pose_landmarks_proto.landmark.extend(global_landmarks)
 
-def draw_landmarks_on_image(rgb_image, detection_result):
-    pose_landmarks_list = detection_result.pose_landmarks
-    annotated_image = np.copy(rgb_image)
-
-    for idx in range(len(pose_landmarks_list)):
-        pose_landmarks = pose_landmarks_list[idx]
-
-        pose_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
-        pose_landmarks_proto.landmark.extend([
-            landmark_pb2.NormalizedLandmark(x=landmark.x, y=landmark.y, z=landmark.z) for landmark in
-            pose_landmarks
-        ])
-        mp_drawing.draw_landmarks(
-            annotated_image,
+    mp_drawing.draw_landmarks(
+            rgb_image,
             pose_landmarks_proto,
             mp_pose.POSE_CONNECTIONS,
             mp_drawing.DrawingSpec(color=POSE_COLOR_1, thickness=2, circle_radius=4),
             mp_drawing.DrawingSpec(color=POSE_COLOR_2, thickness=2, circle_radius=2)
         )
-    return annotated_image
+
 
 def visualize_objects(rgb_image, detection_result):
-    annotated_image = np.copy(rgb_image)
+    annotated_image = rgb_image
 
-    for detection in detection_result.detections:
-        bbox = detection.bounding_box
-        start_point = bbox.origin_x, bbox.origin_y
-        end_point = bbox.origin_x + bbox.width, bbox.origin_y + bbox.height
+    for box in detection_result:
+        start_point = int(box.xyxy[0][0]), int(box.xyxy[0][1])
+        end_point = int(box.xyxy[0][2]), int(box.xyxy[0][3])
         cv2.rectangle(annotated_image, start_point, end_point, DETECTION_COLOR, 2)
 
-        category = detection.categories[0]
-        class_name = category.category_name
-        probability = round(category.score, 2)
+        class_name = model.names[int(box.cls[0])]
+        probability = ceil((box.conf[0] * 100)) / 100
         result_text = class_name + ' (' + str(probability) + ')'
-        text_location = (bbox.origin_x + 5, bbox.origin_y + 15)
+        text_location = (start_point[0] + 5, start_point[1] + 15)
         cv2.putText(annotated_image, result_text, text_location, cv2.FONT_HERSHEY_PLAIN, 1, DETECTION_COLOR, 2)
-
-    return annotated_image
-
-video_path = 'videokids2.mp4'
-cap = cv2.VideoCapture(video_path)
-
-if not cap.isOpened():
-    print("Не удалось открыть видео.")
-    exit()
-
-# Initialize safe zone rectangle coordinates and drawing state
-drawing = False
-x1, y1, x2, y2 = 0, 0, 0, 0
-safe_zone_defined = False
 
 def draw_rectangle(event, x, y, flags, param):
     global x1, y1, x2, y2, drawing, safe_zone_defined
@@ -236,33 +71,101 @@ def draw_rectangle(event, x, y, flags, param):
         x2, y2 = x, y
         safe_zone_defined = True
 
-# Create window and bind the drawing function
-cv2.namedWindow('Воспроизведение видео с ориентирами позы и обнаружением объектов')
-cv2.setMouseCallback('Воспроизведение видео с ориентирами позы и обнаружением объектов', draw_rectangle)
 
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        break
+def get_person(res):
+    class_name = model.names[int(res.cls[0])]
+    if class_name == "person":
+        return True
+    return False
 
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
 
-    pose_detection_result = pose_detector.detect(mp_image)
-    object_detection_result = object_detector.detect(mp_image)
+def get_area_box(x1: int, y1: int, x2: int, y2: int) -> int:
+    return (x2 - x1) * (y2 - y1)
 
-    annotated_image = draw_landmarks_on_image(frame_rgb, pose_detection_result) # Draw pose landmarks
-    annotated_image = visualize_objects(annotated_image, object_detection_result) # Draw object detections
-    frame = cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR) # Back to BGR for OpenCV
 
-    # Draw the safe zone rectangle if it's defined
-    if safe_zone_defined:
-        cv2.rectangle(frame, (x1, y1), (x2, y2), SAFE_ZONE_COLOR, 2)
+def get_person_crop(frame, boxs, padding=200):
+    new_box = []
+    for box in boxs:
+        start_point = int(box.xyxy[0][0]), int(box.xyxy[0][1])
+        end_point = int(box.xyxy[0][2]), int(box.xyxy[0][3])
+        area = get_area_box(*start_point, *end_point)
+        new_box.append([start_point, end_point, area])
+    max_area = max(new_box, key=lambda x: x[2])
+    x1 = max_area[0][0] - padding if max_area[0][0] - padding > 0 else 1
+    x2 = max_area[1][0] + padding if max_area[1][0] + padding < frame.shape[1] else frame.shape[1]
+    y1 = max_area[0][1] - padding if max_area[0][1] - padding > 0 else 1
+    y2 = max_area[1][1] + padding if max_area[1][1] + padding < frame.shape[0] else frame.shape[0]
 
-    cv2.imshow('Воспроизведение видео с ориентирами позы и обнаружением объектов', frame)
+    return frame[y1: y2,
+                 x1: x2].copy(), [[x1, y1], [x2, y2], max_area[2]]
 
-    if cv2.waitKey(25) & 0xFF == ord('q'):
-        break
+
+def get_depth_img(depth):
+    depth_np = np.array(depth)
+
+    depth_normalized = cv2.normalize(depth_np, None, 0, 255, cv2.NORM_MINMAX)
+    depth_uint8 = depth_normalized.astype(np.uint8)
+    depth_colormap = cv2.applyColorMap(depth_uint8, cv2.COLORMAP_INFERNO)
+    return depth_colormap
+
+
+video_path = 'videokids.mp4'
+cap = cv2.VideoCapture(video_path)
+
+if not cap.isOpened():
+    print("Не удалось открыть видео.")
+    exit()
+
+# Initialize safe zone rectangle coordinates and drawing state
+drawing = False
+x1, y1, x2, y2 = 0, 0, 0, 0
+safe_zone_defined = False
+
+model = YOLO("yolo11n.pt")
+pipe = pipeline(task="depth-estimation", model="depth-anything/Depth-Anything-V2-Small-hf")
+
+cv2.namedWindow('main')
+cv2.setMouseCallback('main', draw_rectangle)
+
+new_width = 900
+new_height = 500
+
+with mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5) as pose:
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        depth = pipe(Image.fromarray(frame_rgb))["depth"]
+        depth = get_depth_img(depth)
+
+        result = model(frame, verbose=False)
+        result = list(filter(get_person, result[0].boxes))
+        if len(result) > 0:
+            crop, local_box = get_person_crop(frame, result)
+
+        mp_frame = mp.Image(image_format=mp.ImageFormat.SRGB, data=crop)
+        pose_detection_result = pose.process(mp_frame.numpy_view())
+        pose_landmarks = pose_detection_result.pose_landmarks
+        if pose_landmarks is not None:
+            draw_landmarks_on_image(frame,
+                                    pose_landmarks,
+                                    local_box[0][0],
+                                    local_box[0][1],
+                                    local_box[1][0] - local_box[0][0],
+                                    local_box[1][1] - local_box[0][1])
+        visualize_objects(frame, result)
+
+        if safe_zone_defined:
+            cv2.rectangle(frame, (x1, y1), (x2, y2), SAFE_ZONE_COLOR, 2)
+
+        cv2.imshow('main', frame)
+        cv2.imshow('crop', crop)
+        cv2.imshow('depth', depth)
+
+        if cv2.waitKey(25) & 0xFF == ord('q'):
+            break
 
 cap.release()
 cv2.destroyAllWindows()
